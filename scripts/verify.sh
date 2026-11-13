@@ -7,9 +7,21 @@ SERVICE=secgate-gui
 DEB=vendor/KYLIN-X86_SDWANClient_Setup.deb
 OFFICIAL_MD5=49e3472a779e62be596117e4cefaee4a
 
+# SOCKS5 探测目标：默认用 IP 字面量。宿主若跑 clash/mihomo 的 fake-ip DNS，
+# 容器会把域名解析成 198.18.x.x，这类地址只在拦截流量的代理里生效，
+# 交给 microsocks 必然连不上 → 误报。需要时用 SOCKS_TEST_URL 覆盖。
+SOCKS_TEST_URL="${SOCKS_TEST_URL:-http://223.5.5.5/}"
+
 ok()   { printf '  \033[32m✔\033[0m %s\n' "$*"; }
 bad()  { printf '  \033[31m✘\033[0m %s\n' "$*"; }
 info() { printf '  \033[36m·\033[0m %s\n' "$*"; }
+
+# 取 HTTP 状态码。curl 失败时自己会输出 000，再补 `|| echo 000` 会拼成 "000000"。
+http_code() {
+    local out
+    out=$(curl -s -m "${CURL_TIMEOUT:-10}" -o /dev/null -w '%{http_code}' "$@" 2>/dev/null) || true
+    printf '%s' "${out:-000}"
+}
 
 echo "== 1. vendor deb 校验（官方 CDN md5 / 本地 sha256）=="
 if [ -f "$DEB" ]; then
@@ -48,15 +60,18 @@ win=$(docker exec "$SERVICE" xwininfo -root -tree 2>/dev/null | grep -c '"sslvpn
 
 echo "== 4. noVNC / VNC =="
 info "noVNC: http://127.0.0.1:6080/vnc.html"
-code=$(curl -s -m 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:6080/vnc.html || echo 000)
+code=$(http_code http://127.0.0.1:6080/vnc.html)
 [ "$code" = 200 ] && ok "vnc.html 200" || bad "vnc.html 返回 $code"
 docker exec "$SERVICE" pgrep -x x11vnc >/dev/null && ok "x11vnc 在跑" || bad "x11vnc 未运行"
 
 echo "== 5. SOCKS5 =="
 info "映射: $(docker port "$SERVICE" 1080/tcp 2>/dev/null | head -1)"
 docker exec "$SERVICE" pgrep -x microsocks >/dev/null && ok "microsocks 在跑" || bad "microsocks 未运行"
-code=$(curl -s -m 12 --socks5-hostname 127.0.0.1:1080 -o /dev/null -w '%{http_code}' https://example.com || echo 000)
-[ "$code" = 200 ] && ok "SOCKS5 端到端可用（未登录时走容器默认网关）" || bad "SOCKS5 端到端失败（$code）"
+code=$(http_code --socks5-hostname 127.0.0.1:1080 "$SOCKS_TEST_URL")
+case "$code" in
+  000) bad "SOCKS5 转发失败（$SOCKS_TEST_URL 连不上）" ;;
+  *)   ok "SOCKS5 转发正常（$SOCKS_TEST_URL → HTTP $code；非 2xx 也说明链路已通）" ;;
+esac
 
 echo "== 6. 隧道现状（未登录时应无 tun0）=="
 docker exec "$SERVICE" sh -c 'ip -o link show tun0 2>/dev/null || echo "  (无 tun0 —— 还没在界面里登录，正常)"'
