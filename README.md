@@ -7,6 +7,8 @@ Xvfb + noVNC 提供浏览器桌面，用它完成登录（含**二次认证**）
 定位与「VPN 客户端进容器 + 暴露 socks」这类镜像（如 `docker-atrust`、`docker-easyconnect`）
 一致，只是厂商换成了奇安信。
 
+![登录页（容器内 noVNC 看到的客户端界面）](screenshots/login.png)
+
 ## 为什么要用图形端
 
 命令行版（`sslvpnclient` 的 `secgateaccess`）在开启二次认证的网关上走不通，实测现象：
@@ -103,17 +105,20 @@ NAS_HOST=nas FORCE_PUSH=1 make nas-deploy # 强制重推镜像
 ```
 
 - 宿主机只需 `docker`/Container Manager，且内核有 `tun`（`ls /dev/net/tun`）
-- 默认发布 `1080 → 容器 1080`（SOCKS5）、`6080 → 容器 6080`（noVNC），
+- 默认发布 `127.0.0.1:1080 → 容器 1080`（SOCKS5）、`127.0.0.1:6080 → 容器 6080`（noVNC），
   用 `SOCKS_PORT` / `VNC_PORT` 覆盖；端口别和宿主上已有的 VPN 容器撞车
+- **两个端口都没有认证**：默认只绑 NAS 回环，本机访问走 SSH 隧道。
+  `BIND_ADDR=0.0.0.0` 会把桌面和 SOCKS5 暴露给能连到 NAS 的任何人，脚本会告警
 - 数据目录 `NAS_BASE`（默认 `/volume2/docker/secgate-vpn`）
-- noVNC 地址：`http://<NAS_IP>:6080/vnc.html`
+- noVNC 地址（走隧道后）：`http://127.0.0.1:6080/vnc.html`
 
 NAS 上验证：
 
 ```bash
 ssh "$NAS_HOST" 'sudo docker ps --filter name=secgate-gui'
-curl -s -o /dev/null -w '%{http_code}\n' http://<NAS_IP>:6080/vnc.html    # 200
-curl --socks5-hostname <NAS_IP>:1080 http://<内网地址>/                   # 登录后 200
+ssh -N -L 6080:127.0.0.1:6080 -L 1080:127.0.0.1:1080 "$NAS_HOST" &      # 隧道
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:6080/vnc.html # 200
+curl --socks5-hostname 127.0.0.1:1080 http://<内网地址>/                # 登录后 200
 ```
 
 ## 接入 Clash / mihomo
@@ -132,8 +137,8 @@ EXCLUDE_CIDRS='192.168.0.0/16,10.0.0.0/8' make ruleset > qax.yml
 
 ```yaml
 payload:
-  - "10.8.0.0/24"
-  - "172.20.5.0/24"
+  - "192.0.2.0/24"
+  - "198.51.100.0/24"
 ```
 
 对应的 mihomo 配置（示例）：
