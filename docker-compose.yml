@@ -45,30 +45,3 @@ services:
       options:
         max-size: "10m"
         max-file: "2"
-
-  # 命令行版（无图形界面，不能做二次认证）—— 需要时 docker compose --profile cli up -d
-  secgate-cli:
-    profiles: ["cli"]
-    build:
-      context: .
-      dockerfile: Dockerfile.cli
-    image: local/secgate-cli:1.1.2.65051
-    container_name: secgate-cli
-    restart: unless-stopped
-    init: true
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    environment:
-      TZ: Asia/Shanghai
-    ports:
-      - "127.0.0.1:1081:1080"
-    volumes:
-      - ./runtime-cli:/opt/sslvpnclient/runtime
-      - ./log-cli:/opt/sslvpnclient/log
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "2"

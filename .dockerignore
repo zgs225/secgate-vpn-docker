@@ -4,9 +4,7 @@
 .github
 screenshots
 log
-log-cli
 runtime
-runtime-cli
 root-home
 scripts
 docs
@@ -14,5 +12,4 @@ docs
 # 厂商包：只放行已知的两个 deb，其它（含临时文件）不进上下文
 vendor/*
 !vendor/KYLIN-X86_SDWANClient_Setup.deb
-!vendor/Ubuntu_SDWANClient_Setup.deb
 !vendor/README.md

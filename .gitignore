@@ -4,10 +4,6 @@ log/*
 !log/.gitkeep
 root-home/*
 !root-home/.gitkeep
-runtime-cli/*
-!runtime-cli/.gitkeep
-log-cli/*
-!log-cli/.gitkeep
 # 截图：只跟踪 README 用的 login.png，make shot 生成的 gui-*.png 不入库
 screenshots/*
 !screenshots/login.png

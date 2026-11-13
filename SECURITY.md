@@ -46,8 +46,8 @@ ssh -N -L 6080:127.0.0.1:6080 -L 1080:127.0.0.1:1080 <主机>
 以下目录已在 `.gitignore` 中排除，因为它们会泄漏真实的网关地址、内网路由和账号：
 
 ```
-runtime/  runtime-cli/    登录态（保存的服务器地址/账号）
-log/      log-cli/        gui.out、sslvpnSdk.log（含网关下发的路由与报错）
+runtime/                  登录态（保存的服务器地址/账号）
+log/                      gui.out、sslvpnSdk.log（含网关下发的路由与报错）
 root-home/                GUI 的 HOME（QQml 缓存、openbox 日志）
 screenshots/*.png         仅跟踪 screenshots/login.png（字段为空的那张）
 vendor/*.deb *.part *.sha256

@@ -24,6 +24,7 @@ log.txt: <info>  Connect server success
 - 二次认证没有对应的输入入口 → 认证必被拒
 
 图形端（Qt5 + QML）登录后会弹二次认证窗口，是唯一能走完流程的实现，所以本项目以图形端为主。
+曾验证过的命令行版镜像已从仓库移除（走不完认证流程的镜像没有保留价值），上面的结论留作背景。
 
 ## 客户端来源
 
@@ -34,13 +35,11 @@ log.txt: <info>  Connect server success
 | 本项目用的包 | `download/sdwan-v6.0/hygon_kylin/KYLIN-X86_SDWANClient_Setup.deb`（「海光麒麟」amd64 GUI） |
 | 版本 / 校验 | `sslvpnclient 1.1.3.1010701`，md5 `49e3472a779e62be596117e4cefaee4a` |
 | 包结构 | linuxdeployqt 打包：`files/bin/sslvpn`（19 MB）+ `libsslvpnsdk.so` + 自带 Qt5/字体，落盘 `/opt/sslvpnclient` |
-| 命令行版（备用） | 官方 CDN 的 `Ubuntu_SDWANClient_Setup.deb`，只有一个 `secgateaccess` 二进制 |
 
 > 厂商的安装包**不入库**（本仓库不转发第三方二进制）。第一次构建前先取包：
 >
 > ```bash
-> make fetch        # 图形端 → vendor/KYLIN-X86_SDWANClient_Setup.deb（带 md5 校验）
-> make cli-fetch    # 命令行端 → vendor/Ubuntu_SDWANClient_Setup.deb
+> make fetch        # → vendor/KYLIN-X86_SDWANClient_Setup.deb（带 md5 校验）
 > ```
 >
 > 详见 `vendor/README.md`。
@@ -57,9 +56,8 @@ log.txt: <info>  Connect server success
 
 ```
 Dockerfile            图形端镜像（ubuntu24.04 + 麒麟 GUI 包 + Xvfb/noVNC + microsocks）
-Dockerfile.cli        命令行版镜像（profile: cli，不能二次认证）
 docker-entrypoint.sh  起 Xvfb/openbox/x11vnc/websockify/microsocks，再拉起 GUI（崩溃自启）
-docker-compose.yml    默认 secgate-gui；secgate-cli 在 profile 里
+docker-compose.yml    secgate-gui
 Makefile               make help 看全部
 scripts/verify.sh      只读自检（含自动截图）
 scripts/deploy-nas.sh  部署到 NAS（Synology）并（重）建容器
@@ -201,9 +199,9 @@ rules:
   并重新过二次认证。
 - **noVNC / SOCKS 没有认证** — 默认只绑回环或仅在内网。要在别的机器用请走 SSH 隧道：
   `ssh -L 6080:127.0.0.1:6080 -L 1080:127.0.0.1:1080 <本机>`，不要直接暴露到公网。
-- **需要命令行版** — `make cli-build cli-up`，SOCKS 在 `127.0.0.1:1081`；但**开二次认证的网关它连不上**。
-- **arm64 主机** — 官方 Linux CLI 仅 amd64。要么用麒麟 KP 包（Qt GUI，需 noVNC），
-  要么在 compose 里加 `platform: linux/amd64` 让 qemu 跑（慢，且需要 binfmt）。
+- **需要命令行版** — 不提供。CLI 端在开二次认证的网关上进不了隧道，镜像也就不保留。
+- **arm64 主机** — 官方 Linux 客户端只有 amd64 包。要么在 compose 里加 `platform: linux/amd64`
+  让 qemu 跑（慢，且需要 binfmt），要么想别的办法。
 
 ## 免责声明
 
