@@ -1,15 +1,18 @@
 SERVICE := secgate-gui
-IMAGE   := local/secgate-gui:1.1.3.1010701
+IMAGE   := $(or $(SECGATE_IMAGE),ghcr.io/zgs225/secgate-vpn-docker:latest)
 GUI     := /opt/sslvpnclient/files/bin/sslvpn
 URL     := http://127.0.0.1:6080/vnc.html
 
-.PHONY: help build up down restart ps logs url shot verify shell window ruleset nas-deploy fetch rebuild clean
+.PHONY: help build pull up down restart ps logs url shot verify shell window ruleset nas-deploy fetch rebuild clean
 
 help: ## 显示所有可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-build: ## 构建图形端镜像（官方海光麒麟 deb）
+build: ## 本地构建图形端镜像（需要 vendor/ 里的官方海光麒麟 deb，打 ghcr 同名 tag）
 	docker compose build
+
+pull: ## 拉取 GitHub Actions 发布到 GHCR 的镜像（不想本地构建时用它）
+	docker compose pull $(SERVICE)
 
 rebuild: ## 无缓存重建图形端镜像
 	docker compose build --no-cache secgate-gui

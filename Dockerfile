@@ -15,7 +15,10 @@ FROM ubuntu:24.04
 
 LABEL org.opencontainers.image.title="secgate-access-gui" \
       org.opencontainers.image.description="QiAnXin SecGate Access SD-WAN/SSL VPN GUI client (Kylin/amd64) + noVNC + microsocks" \
-      org.opencontainers.image.version="1.1.3.1010701"
+      org.opencontainers.image.version="1.1.3.1010701" \
+      org.opencontainers.image.source="https://github.com/zgs225/secgate-vpn-docker" \
+      org.opencontainers.image.url="https://github.com/zgs225/secgate-vpn-docker" \
+      org.opencontainers.image.licenses="MIT"
 
 ENV DEBIAN_FRONTEND=noninteractive
 

@@ -1,5 +1,7 @@
 # secgate-vpn-docker
 
+[![Build & Publish](https://github.com/zgs225/secgate-vpn-docker/actions/workflows/docker.yml/badge.svg)](https://github.com/zgs225/secgate-vpn-docker/actions/workflows/docker.yml)
+
 把**奇安信（网神）SecGate Access**（SD-WAN / SSL VPN）客户端塞进容器：容器内跑
 Xvfb + noVNC 提供浏览器桌面，用它完成登录（含**二次认证**）；同时跑 `microsocks`
 对外提供 SOCKS5，登录成功后容器内流量走客户端建立的 `tun0` 进入内网。
@@ -59,21 +61,59 @@ Dockerfile            图形端镜像（ubuntu24.04 + 麒麟 GUI 包 + Xvfb/noVN
 docker-entrypoint.sh  起 Xvfb/openbox/x11vnc/websockify/microsocks，再拉起 GUI（崩溃自启）
 docker-compose.yml    secgate-gui
 Makefile               make help 看全部
+.github/workflows/docker.yml  main 分支构建镜像并发布到 ghcr.io
 scripts/verify.sh      只读自检（含自动截图）
 scripts/deploy-nas.sh  部署到 NAS（Synology）并（重）建容器
+scripts/fetch-client-deb.sh  从官方下载站取厂商 deb（带 md5 校验）
 scripts/export-clash-ruleset.sh  tun0 路由 → clash/mihomo ipcidr ruleset
 LICENSE                MIT
 vendor/                安装包放这里（不入库，见 vendor/README.md）
 runtime/ log/ root-home/  登录态、日志、GUI 家目录（已 gitignore）
 ```
 
+## 镜像（GitHub Container Registry）
+
+`main` 分支每次推送由 GitHub Actions（[`.github/workflows/docker.yml`](.github/workflows/docker.yml)）
+构建并发布到 GHCR，不用本地取包也能直接用：
+
+```bash
+docker pull ghcr.io/zgs225/secgate-vpn-docker:latest
+```
+
+| tag | 说明 |
+|---|---|
+| `latest` | `main` 最新构建 |
+| `1.1.3.1010701` | 对应的厂商客户端版本（跟 Dockerfile 的 LABEL 走） |
+| `sha-xxxxxxx` | 每次提交一个，便于回滚/复现 |
+| `1.2.3` / `1.2` | 打 `v1.2.3` tag 时额外产生 |
+
+镜像只有 **linux/amd64**（厂商只发海光麒麟 amd64 包）。arm64 主机需要
+`platform: linux/amd64` + binfmt（走 qemu，很慢）。
+
+CI 说明：
+
+- 厂商 deb **不入库**，workflow 里跑 `scripts/fetch-client-deb.sh` 从官方下载站取包并校验 md5，
+  命中 `actions/cache` 时跳过这 60 MB 下载
+- PR 只构建不推送，并在 runner 上跑冒烟检查（客户端二进制 / 字体 / noVNC 依赖）
+- 首次发布后 GHCR 包默认**私有**：GitHub → 该包的 Package settings 改成 public，
+  否则其它机器需要 `docker login ghcr.io`（PAT 至少带 `read:packages`）
+
 ## 用法（本机）
+
+不想本地构建（不装 deb、不需要 docker build）：
+
+```bash
+make pull       # 拉 ghcr.io/zgs225/secgate-vpn-docker:latest
+make up         # 启动
+make url        # http://127.0.0.1:6080/vnc.html
+```
+
+从源码构建（等于把同一个 ghcr tag 打在本地）：
 
 ```bash
 make fetch      # 先从官方下载站取图形端安装包（vendor/*.deb 不入库）
-make build      # 构建 local/secgate-gui:1.1.3.1010701
+make build      # 构建 ghcr.io/zgs225/secgate-vpn-docker:latest
 make up         # 启动
-make url        # http://127.0.0.1:6080/vnc.html
 make shot       # 截一张当前桌面到 screenshots/（不开浏览器也能看状态）
 make window     # 列 X 窗口，确认客户端窗口在
 make verify     # 全套自检
@@ -98,9 +138,14 @@ curl --socks5-hostname 127.0.0.1:1080 http://<内网地址>/
 ## 部署到 NAS（Synology 等）
 
 ```bash
-NAS_HOST=nas make nas-deploy              # 幂等：镜像已在 NAS 上就跳过传输
-NAS_HOST=nas FORCE_PUSH=1 make nas-deploy # 强制重推镜像
+NAS_HOST=nas make nas-deploy              # 幂等：NAS 上已有镜像就跳过，否则先在 NAS 上 docker pull
+NAS_HOST=nas FORCE_PUSH=1 make nas-deploy # 本地构建后强制 save/load 过去（跳过 pull）
 ```
+
+- 默认部署 `ghcr.io/zgs225/secgate-vpn-docker:latest`：先看 NAS 上有没有，没有就在 NAS 上
+  `docker pull`（公开包匿名可拉；还是私有包就得先在 NAS 上 `sudo docker login ghcr.io`）
+- 拉不到才退回本机 `docker save | ssh | docker load`（此时本机要有镜像，`make build`/`make pull`）
+- 固定版本：`NAS_HOST=nas IMAGE=ghcr.io/zgs225/secgate-vpn-docker:sha-abc1234 make nas-deploy`
 
 - 宿主机只需 `docker`/Container Manager，且内核有 `tun`（`ls /dev/net/tun`）
 - 默认发布 `127.0.0.1:1080 → 容器 1080`（SOCKS5）、`127.0.0.1:6080 → 容器 6080`（noVNC），
@@ -177,7 +222,7 @@ rules:
 
 ## 人工验证清单
 
-1. `make build` 成功，镜像里 `dpkg -i` 无报错
+1. `make pull` 或 `make build` 成功（镜像里 `dpkg -i` 无报错）
 2. `make up && make verify` 全绿（未登录时「无 tun0」正常）
 3. `make shot` 截图里能看到奇安信登录窗口，**中文不是「口口」**
 4. noVNC 能操作（键盘/鼠标），能切换「国内版/国际版」

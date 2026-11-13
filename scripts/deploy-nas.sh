@@ -2,13 +2,14 @@
 # 把图形端镜像部署到 NAS（Synology DSM 等，只要宿主有 docker + /dev/net/tun）
 # 并（重）建容器。
 #
-#   NAS_HOST=nas ./scripts/deploy-nas.sh              # 幂等：镜像已在 NAS 上就跳过传输
-#   NAS_HOST=nas FORCE_PUSH=1 ./scripts/deploy-nas.sh # 强制重推镜像
+#   NAS_HOST=nas ./scripts/deploy-nas.sh              # 幂等：NAS 上已有镜像就跳过，否则先在 NAS 上 pull
+#   NAS_HOST=nas FORCE_PUSH=1 ./scripts/deploy-nas.sh # 强制把本机构建的镜像 save/load 过去
 #
 # 可覆盖的环境变量：
 #   NAS_HOST        NAS 的 ssh 别名/主机名（默认 nas）
 #   NAS_IP          NAS 的 IP（默认通过 ssh 在目标机上取 hostname -i）
-#   IMAGE           镜像名（默认 local/secgate-gui:1.1.3.1010701）
+#   IMAGE           镜像名（默认 ghcr.io/zgs225/secgate-vpn-docker:latest）
+#   PULL            是否先在 NAS 上 docker pull（默认 1；私有包需先在 NAS 上 docker login ghcr.io）
 #   NAS_BASE        NAS 上的数据目录（默认 /volume2/docker/secgate-vpn）
 #   BIND_ADDR       发布端口绑定的地址（默认 127.0.0.1；无认证服务，别随便改成 0.0.0.0）
 #   SOCKS_PORT      SOCKS5 对外端口（默认 1080，按需改，避免和其它 VPN 容器撞车）
@@ -16,7 +17,7 @@
 set -euo pipefail
 
 NAME="${NAME:-secgate-gui}"
-IMAGE="${IMAGE:-local/secgate-gui:1.1.3.1010701}"
+IMAGE="${IMAGE:-ghcr.io/zgs225/secgate-vpn-docker:latest}"
 NAS_HOST="${NAS_HOST:-nas}"
 NAS_BASE="${NAS_BASE:-/volume2/docker/secgate-vpn}"
 SOCKS_PORT="${SOCKS_PORT:-1080}"
@@ -28,16 +29,23 @@ say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 sshq() { ssh -o ConnectTimeout=10 "$NAS_HOST" "$@" 2>&1 \
     | grep -v 'WARNING: connection is not\|post-quantum\|store now\|may need to be upgraded' || true; }
 
-command -v docker >/dev/null || { echo "本机没有 docker" >&2; exit 1; }
-docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "本机缺少镜像 $IMAGE，先 make build" >&2; exit 1; }
+have_local() { command -v docker >/dev/null 2>&1 && docker image inspect "$IMAGE" >/dev/null 2>&1; }
 
 NAS_IP="${NAS_IP:-$(sshq 'hostname -i 2>/dev/null | tr " " "\n" | grep -vE "^127\.|:" | head -1')}"
 [ -n "$NAS_IP" ] || { echo "无法确定 NAS_IP，请显式传入（NAS_IP=x.x.x.x）" >&2; exit 1; }
 say "目标 NAS：$NAS_HOST（$NAS_IP）"
 
 if [ "${FORCE_PUSH:-0}" != "1" ] && sshq "sudo $DOCKER image inspect $IMAGE >/dev/null 2>&1 && echo present" | grep -q present; then
-    say "NAS 上已有 $IMAGE，跳过传输"
+    say "NAS 上已有 $IMAGE，跳过拉取"
+elif [ "${FORCE_PUSH:-0}" != "1" ] && [ "${PULL:-1}" = "1" ] \
+     && sshq "sudo $DOCKER pull -q $IMAGE >/dev/null 2>&1 && echo pulled" | grep -q pulled; then
+    say "已从 registry 在 NAS 上拉取 $IMAGE"
 else
+    have_local || {
+        echo "本机没有 $IMAGE，NAS 上也拉不到（私有包？先在 NAS 上 sudo docker login ghcr.io）" >&2
+        echo "或者本地构建后重跑：make build && FORCE_PUSH=1 ..." >&2
+        exit 1
+    }
     say "传输镜像（docker save | gzip | ssh docker load，视网络几分钟）"
     docker save "$IMAGE" | gzip -1 | ssh -o ConnectTimeout=10 "$NAS_HOST" "gunzip | sudo $DOCKER load"
 fi

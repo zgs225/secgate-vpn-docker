@@ -1,10 +1,12 @@
 services:
   # 默认服务：图形客户端 + noVNC + SOCKS5（二次认证只能在这个界面里点）
   secgate-gui:
+    # 默认用 GitHub Actions 发布到 GHCR 的镜像；本地 build 会打成同一个 tag。
+    # 想换 tag/仓库：SECGATE_IMAGE=ghcr.io/<owner>/<repo>:<tag> make up
+    image: ${SECGATE_IMAGE:-ghcr.io/zgs225/secgate-vpn-docker:latest}
     build:
       context: .
       dockerfile: Dockerfile
-    image: local/secgate-gui:1.1.3.1010701
     container_name: secgate-gui
     hostname: secgate-gui
     restart: unless-stopped

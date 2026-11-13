@@ -23,3 +23,5 @@ make fetch      # 等价于 ./scripts/fetch-client-deb.sh
 
 - 安装包版权归厂商所有，本项目只描述如何获取与安装，不重新分发。
 - 包是 linuxdeployqt 打包的 Qt5 应用，自带 Qt 与字体，解包后落在 `/opt/sslvpnclient`。
+- 不想自己取包的话直接用预构建镜像：`docker pull ghcr.io/zgs225/secgate-vpn-docker:latest`
+  （GitHub Actions 在 CI 里会自己跑 `make fetch` 取包并校验，见 `.github/workflows/docker.yml`）。
