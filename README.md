@@ -95,8 +95,9 @@ CI 说明：
 - 厂商 deb **不入库**，workflow 里跑 `scripts/fetch-client-deb.sh` 从官方下载站取包并校验 md5，
   命中 `actions/cache` 时跳过这 60 MB 下载
 - PR 只构建不推送，并在 runner 上跑冒烟检查（客户端二进制 / 字体 / noVNC 依赖）
-- 首次发布后 GHCR 包默认**私有**：GitHub → 该包的 Package settings 改成 public，
-  否则其它机器需要 `docker login ghcr.io`（PAT 至少带 `read:packages`）
+- 仓库是 public，包随仓库公开可匿名拉取（这一点已用空凭据 `docker pull` 验证过）；
+  如果以后把仓库或包改成私有，其它机器上就要 `docker login ghcr.io`
+  （PAT 至少带 `read:packages`）
 
 ## 用法（本机）
 
