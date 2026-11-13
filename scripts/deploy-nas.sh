@@ -10,6 +10,7 @@
 #   NAS_IP          NAS 的 IP（默认通过 ssh 在目标机上取 hostname -i）
 #   IMAGE           镜像名（默认 local/secgate-gui:1.1.3.1010701）
 #   NAS_BASE        NAS 上的数据目录（默认 /volume2/docker/secgate-vpn）
+#   BIND_ADDR       发布端口绑定的地址（默认 127.0.0.1；无认证服务，别随便改成 0.0.0.0）
 #   SOCKS_PORT      SOCKS5 对外端口（默认 1080，按需改，避免和其它 VPN 容器撞车）
 #   VNC_PORT        noVNC 对外端口（默认 6080）
 set -euo pipefail
@@ -20,6 +21,7 @@ NAS_HOST="${NAS_HOST:-nas}"
 NAS_BASE="${NAS_BASE:-/volume2/docker/secgate-vpn}"
 SOCKS_PORT="${SOCKS_PORT:-1080}"
 VNC_PORT="${VNC_PORT:-6080}"
+BIND_ADDR="${BIND_ADDR:-127.0.0.1}"
 DOCKER=/var/packages/ContainerManager/target/usr/bin/docker
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
@@ -43,12 +45,12 @@ fi
 say "准备数据目录 $NAS_BASE"
 sshq "sudo mkdir -p $NAS_BASE/runtime $NAS_BASE/log $NAS_BASE/root-home && sudo chmod -R 777 $NAS_BASE"
 
-say "（重）建容器 $NAME   socks=$SOCKS_PORT  novnc=$VNC_PORT"
+say "（重）建容器 $NAME   socks=$BIND_ADDR:$SOCKS_PORT  novnc=$BIND_ADDR:$VNC_PORT"
 sshq "sudo $DOCKER rm -f $NAME >/dev/null 2>&1 || true; sudo $DOCKER run -d \
   --name $NAME --hostname $NAME --restart unless-stopped \
   --cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun \
   -e TZ=${TZ:-Asia/Shanghai} -e SCREEN=1280x800x24 \
-  -p $SOCKS_PORT:1080 -p $VNC_PORT:6080 \
+  -p $BIND_ADDR:$SOCKS_PORT:1080 -p $BIND_ADDR:$VNC_PORT:6080 \
   --shm-size 512m \
   -v $NAS_BASE/runtime:/opt/sslvpnclient/runtime \
   -v $NAS_BASE/log:/opt/sslvpnclient/log \
@@ -58,17 +60,34 @@ sshq "sudo $DOCKER rm -f $NAME >/dev/null 2>&1 || true; sudo $DOCKER run -d \
 
 say "等待就绪"
 for _ in $(seq 1 30); do
-    if curl -fsS -m 3 -o /dev/null "http://$NAS_IP:$VNC_PORT/vnc.html" 2>/dev/null; then
-        say "noVNC 就绪： http://$NAS_IP:$VNC_PORT/vnc.html"
+    if sshq "curl -fsS -m 3 -o /dev/null 'http://$BIND_ADDR:$VNC_PORT/vnc.html' && echo ready" | grep -q ready; then
+        say "noVNC 就绪"
         break
     fi
     sleep 2
 done
 
-cat <<EOF
+if [ "$BIND_ADDR" = "127.0.0.1" ] || [ "$BIND_ADDR" = "localhost" ]; then
+    cat <<EOF
+
+noVNC / SOCKS5 只绑在 NAS 回环上（两者都没有认证）。本机先建隧道：
+  ssh -N -L $VNC_PORT:127.0.0.1:$VNC_PORT -L $SOCKS_PORT:127.0.0.1:$SOCKS_PORT $NAS_HOST
+
+下一步（人工，需要过二次认证）：
+  1. 浏览器打开 http://127.0.0.1:$VNC_PORT/vnc.html
+  2. 选「国内版/国际版」，填服务器地址与端口，登录并输入验证码
+  3. 回来后验证： curl --socks5-hostname 127.0.0.1:$SOCKS_PORT http://<内网地址>/
+EOF
+else
+    cat <<EOF
+
+警告：BIND_ADDR=$BIND_ADDR 会把无认证的 noVNC / SOCKS5 暴露到网络，
+      任何能连到 $NAS_IP 的人都可操作桌面或在登录后走你的隧道。
+      建议改回 BIND_ADDR=127.0.0.1 并走 SSH 隧道。
 
 下一步（人工，需要过二次认证）：
   1. 浏览器打开 http://$NAS_IP:$VNC_PORT/vnc.html
   2. 选「国内版/国际版」，填服务器地址与端口，登录并输入验证码
   3. 回来后验证： curl --socks5-hostname $NAS_IP:$SOCKS_PORT http://<内网地址>/
 EOF
+fi

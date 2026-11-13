@@ -14,7 +14,7 @@ log() { echo "[entrypoint] $*"; }
 
 cleanup() {
     log "收到退出信号，清理子进程"
-    kill $(jobs -p) 2>/dev/null
+    jobs -p | xargs -r kill 2>/dev/null
     wait 2>/dev/null
 }
 trap cleanup EXIT INT TERM

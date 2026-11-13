@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 图形端自检：只读检查，不点击登录。
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 SERVICE=secgate-gui
 DEB=vendor/KYLIN-X86_SDWANClient_Setup.deb
@@ -16,7 +16,15 @@ if [ -f "$DEB" ]; then
   md5=$(md5sum "$DEB" | awk '{print $1}')
   info "md5=$md5"
   [ "$md5" = "$OFFICIAL_MD5" ] && ok "与官方 md5 一致" || bad "md5 与官方不一致（下载被截断？）"
-  sha256sum -c "$DEB.sha256" --status 2>/dev/null && ok "sha256 一致" || bad "sha256 不一致"
+  if [ -f "$DEB.sha256" ]; then
+    if ( cd "$(dirname "$DEB")" && sha256sum -c "$(basename "$DEB").sha256" --status ); then
+      ok "sha256 与 $DEB.sha256 一致"
+    else
+      bad "sha256 不一致"
+    fi
+  else
+    info "无 $DEB.sha256（make fetch 会生成），跳过 sha256 校验"
+  fi
 else
   bad "缺少 $DEB"
 fi

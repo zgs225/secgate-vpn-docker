@@ -18,7 +18,7 @@ services:
 
     environment:
       TZ: Asia/Shanghai
-      SCREEN: 1280x800x24""
+      SCREEN: "1280x800x24"
 
     ports:
       # noVNC（浏览器桌面）与 SOCKS5 都只监听回环：
