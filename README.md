@@ -96,11 +96,13 @@ docker pull ghcr.io/zgs225/secgate-vpn-docker:latest
 
 CI 说明：
 
-- 厂商 deb **不入库**，workflow 跑 `scripts/fetch-client-deb.sh all` 取两个包并校验 md5，
-  命中 `actions/cache` 时跳过这 100 MB 下载
-- arm64 的 RUN 步骤在 amd64 runner 上由 `docker/setup-qemu-action` 模拟
-- PR 不推送：amd64 载入后跑 `scripts/smoke-image.sh`；另有**原生 arm64 runner**
-  （`ubuntu-24.04-arm`）跑同一套冒烟（Xvfb/noVNC/SOCKS5/GUI 进程 + ELF 架构匹配）
+- 厂商 deb **不入库**，workflow 按架构跑 `scripts/fetch-client-deb.sh <arch>` 取包并校验 md5，
+  命中 `actions/cache` 时不再下载（每个架构 ~50 MB）
+- 构建用**两个原生 runner**（`ubuntu-latest` 建 amd64、`ubuntu-24.04-arm` 建 arm64），
+  各自按 digest 推送，再由 merge job 用 `docker buildx imagetools create` 合成 manifest list——
+  不走 qemu，整条流水线约 3 分钟（qemu 时代是 10 分钟）
+- PR 不推送：两个架构各自 `--load` 到原生 runner 跑 `scripts/smoke-image.sh`
+  （Xvfb/noVNC/SOCKS5/GUI 进程 + ELF 机器码与架构匹配）
 - 仓库是 public，包随仓库公开可匿名拉取（这一点已用空凭据 `docker pull` 验证过）；
   如果以后把仓库或包改成私有，其它机器上就要 `docker login ghcr.io`
   （PAT 至少带 `read:packages`）

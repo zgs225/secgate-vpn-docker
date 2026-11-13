@@ -1,13 +1,16 @@
 # 构建多架构镜像（linux/amd64 + linux/arm64）并发布到 GitHub Container Registry（ghcr.io）。
 #
-# 关键点：厂商 deb 不入库，CI 里用 scripts/fetch-client-deb.sh 从官方下载站取包并按 md5
-# 校验（命中 actions/cache 时跳过 100 MB 下载）。厂商按架构分别发包：
+# 构建方式：两个**原生** runner 各建各的架构（不走 qemu），各自按 digest 推送，
+# 再由一个合并 job 用 `docker buildx imagetools create` 合成 manifest list。
+# 这样 arm64 不需要模拟执行 apt/dpkg，整条流水线从 ~10 分钟降到 ~3 分钟。
+#
+# 关键点：厂商 deb 不入库，CI 里用 scripts/fetch-client-deb.sh 按架构取包并校验 md5
+# （命中 actions/cache 时跳过下载）。厂商按架构分别发包：
 #   amd64 → 海光麒麟 KYLIN-X86_...deb
 #   arm64 → 鲲鹏麒麟 KYLIN-ARM_...deb（飞腾麒麟同一文件）
-# Dockerfile 用 buildx 的 TARGETARCH 选包，所以一次构建就出双架构 manifest list。
 #
 # - push main / tag v*  → ghcr.io/<owner>/<repo>（latest / semver / sha-xxxxxxx）
-# - PR                  → 不推送；amd64 载入后跑运行时冒烟，另起原生 arm64 job 跑同样的冒烟
+# - PR                  → 不推送；两架构各自 load 到原生 runner 上跑运行时冒烟
 # - workflow_dispatch   → 按分支规则走
 name: Build & Publish
 
@@ -29,51 +32,50 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
-  CLIENT_MD5_AMD64: 49e3472a779e62be596117e4cefaee4a
-  CLIENT_MD5_ARM64: 5d3ea8c60927bc902a166f14b6cbacd6
 
 jobs:
-  image:
-    name: Build multi-arch image
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            deb: vendor/KYLIN-X86_SDWANClient_Setup.deb
+            md5: 49e3472a779e62be596117e4cefaee4a
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            deb: vendor/KYLIN-ARM_SDWANClient_Setup.deb
+            md5: 5d3ea8c60927bc902a166f14b6cbacd6
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache vendor debs
+      - name: Cache vendor deb
         id: deb-cache
         uses: actions/cache@v4
         with:
           path: vendor/*.deb
-          key: vendor-debs-${{ env.CLIENT_MD5_AMD64 }}-${{ env.CLIENT_MD5_ARM64 }}
+          key: vendor-deb-${{ matrix.arch }}-${{ matrix.md5 }}
 
-      - name: Fetch vendor debs
-        if: steps.deb-cache.outputs.cache-hit != 'true'
-        run: ./scripts/fetch-client-deb.sh all
+      # 即使缓存命中也会跑：脚本对已存在且 md5 正确的包直接跳过，不会重复下载
+      - name: Fetch ${{ matrix.arch }} vendor deb
+        run: ./scripts/fetch-client-deb.sh ${{ matrix.arch }}
 
-      - name: Verify vendor debs
+      - name: Verify ${{ matrix.arch }} vendor deb
         run: |
           set -euo pipefail
-          check() {
-            local f=$1 md5=$2 got
-            [ -f "$f" ] || { echo "缺少 $f" >&2; exit 1; }
-            got=$(md5sum "$f" | awk '{print $1}')
-            echo "$f md5=$got"
-            [ "$got" = "$md5" ] || { echo "md5 与官方不一致：$f" >&2; exit 1; }
-          }
-          check vendor/KYLIN-X86_SDWANClient_Setup.deb "$CLIENT_MD5_AMD64"
-          check vendor/KYLIN-ARM_SDWANClient_Setup.deb "$CLIENT_MD5_ARM64"
-          for f in vendor/*.deb.sha256; do
-            [ -e "$f" ] || continue
-            ( cd vendor && sha256sum -c "$(basename "$f")" )
-          done
-
-      # arm64 的 RUN 步骤（apt / dpkg）在 amd64 runner 上要 qemu 模拟
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
+          got=$(md5sum "${{ matrix.deb }}" | awk '{print $1}')
+          echo "${{ matrix.deb }} md5=$got"
+          [ "$got" = "${{ matrix.md5 }}" ] || { echo "md5 与官方不一致" >&2; exit 1; }
+          if [ -f "${{ matrix.deb }}.sha256" ]; then
+            ( cd vendor && sha256sum -c "$(basename "${{ matrix.deb }}").sha256" )
+          fi
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -86,7 +88,100 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
+      - name: Docker metadata (labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+
+      # 非 PR：只按 digest 推送，不打 tag（tag 由 merge job 统一创建，避免出现临时 tag）
+      - name: Build and push by digest
+        id: build
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            IMAGE_VERSION=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      # PR：load 到 runner 上跑冒烟
+      - name: Build image for smoke test (PR)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: secgate-pr:${{ matrix.arch }}
+          build-args: |
+            IMAGE_VERSION=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Pull pushed image by digest (for smoke test)
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          digest="${{ steps.build.outputs.digest }}"
+          case "$digest" in sha256:*) ;; *) echo "没有拿到 digest：$digest" >&2; exit 1 ;; esac
+          echo "digest=$digest"
+          docker pull "${IMAGE}@${digest}"
+
+      - name: Smoke test ${{ matrix.arch }} image
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            ref="secgate-pr:${{ matrix.arch }}"
+          else
+            ref="${IMAGE}@${{ steps.build.outputs.digest }}"
+          fi
+          ./scripts/smoke-image.sh "$ref"
+
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge multi-arch manifest
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata (tags)
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -98,80 +193,34 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short,prefix=sha-
 
-      - name: Build and push (multi-arch)
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            IMAGE_VERSION=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: true
-          sbom: true
-
-      # PR 不推送，但需要一份能 load 的单架构镜像来做运行时冒烟（缓存命中，很快）
-      - name: Build amd64 image for smoke test
-        if: github.event_name == 'pull_request'
+      - name: Create multi-arch manifest list
+        working-directory: ${{ runner.temp }}/digests
         run: |
-          docker buildx build --platform linux/amd64 --load \
-            --tag secgate-pr:amd64 \
-            --build-arg IMAGE_VERSION="${GITHUB_SHA}" \
-            --cache-from type=gha --cache-to type=gha,mode=max \
-            .
+          set -euo pipefail
+          ls -l
+          tag_args=$(jq -r '.tags[]? | "-t \(.)"' <<< "${{ steps.meta.outputs.tags }}" | tr '\n' ' ')
+          echo "tags: $tag_args"
+          docker buildx imagetools create \
+            $tag_args \
+            $(printf "${IMAGE}@sha256:%s " *)
 
-      - name: Smoke test amd64 image
-        if: github.event_name == 'pull_request'
-        run: ./scripts/smoke-image.sh secgate-pr:amd64
+      - name: Inspect published manifest
+        run: |
+          set -euo pipefail
+          ref=$(printf '%s\n' "${{ steps.meta.outputs.tags }}" | head -n1)
+          echo "== $ref"
+          docker buildx imagetools inspect "$ref"
+          echo "== latest"
+          docker buildx imagetools inspect "${IMAGE}:latest" 2>/dev/null || true
 
       - name: Summary
         run: |
           {
-            echo "### 多架构镜像"
+            echo "### 多架构镜像（原生双 runner 构建 + imagetools 合并）"
             echo
             echo '```'
             printf '%s\n' "${{ steps.meta.outputs.tags }}"
             echo '```'
             echo
-            echo "digest: \`${{ steps.build.outputs.digest }}\`"
-            echo
             echo "平台：linux/amd64（海光麒麟 deb）+ linux/arm64（鲲鹏麒麟 deb）"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  smoke-arm64:
-    # 原生 arm64 runner（公开仓库免费），用来真跑一次镜像而不是靠 qemu 猜
-    name: Native arm64 smoke test
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 40
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Cache vendor debs
-        id: deb-cache
-        uses: actions/cache@v4
-        with:
-          path: vendor/*.deb
-          key: vendor-debs-${{ env.CLIENT_MD5_AMD64 }}-${{ env.CLIENT_MD5_ARM64 }}
-
-      - name: Fetch arm64 vendor deb
-        if: steps.deb-cache.outputs.cache-hit != 'true'
-        run: ./scripts/fetch-client-deb.sh arm64
-
-      - name: Verify arm64 vendor deb
-        run: |
-          set -euo pipefail
-          got=$(md5sum vendor/KYLIN-ARM_SDWANClient_Setup.deb | awk '{print $1}')
-          echo "md5=$got"
-          [ "$got" = "$CLIENT_MD5_ARM64" ] || { echo "md5 与官方不一致" >&2; exit 1; }
-
-      - name: Build arm64 image (native)
-        run: docker build --tag secgate-arm64:ci --build-arg IMAGE_VERSION="${GITHUB_SHA}" .
-
-      - name: Smoke test arm64 image
-        run: ./scripts/smoke-image.sh secgate-arm64:ci
