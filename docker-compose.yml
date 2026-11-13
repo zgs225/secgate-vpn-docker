@@ -1,0 +1,74 @@
+services:
+  # 默认服务：图形客户端 + noVNC + SOCKS5（二次认证只能在这个界面里点）
+  secgate-gui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: local/secgate-gui:1.1.3.1010701
+    container_name: secgate-gui
+    hostname: secgate-gui
+    restart: unless-stopped
+    init: true
+
+    # 客户端要建 tun0、改路由、改 /etc/resolv.conf
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    environment:
+      TZ: Asia/Shanghai
+      SCREEN: 1280x800x24""
+
+    ports:
+      # noVNC（浏览器桌面）与 SOCKS5 都只监听回环：
+      # 无认证，别直接暴露到局域网。远程用 ssh -L 6080:127.0.0.1:6080 隧道。
+      - "127.0.0.1:6080:6080"
+      - "127.0.0.1:1080:1080"
+
+    volumes:
+      - ./runtime:/opt/sslvpnclient/runtime
+      - ./log:/opt/sslvpnclient/log
+      - ./root-home:/root
+
+    shm_size: "512m"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x Xvfb >/dev/null && pgrep -f 'files/bin/sslvpn' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+
+  # 命令行版（无图形界面，不能做二次认证）—— 需要时 docker compose --profile cli up -d
+  secgate-cli:
+    profiles: ["cli"]
+    build:
+      context: .
+      dockerfile: Dockerfile.cli
+    image: local/secgate-cli:1.1.2.65051
+    container_name: secgate-cli
+    restart: unless-stopped
+    init: true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:1081:1080"
+    volumes:
+      - ./runtime-cli:/opt/sslvpnclient/runtime
+      - ./log-cli:/opt/sslvpnclient/log
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"

@@ -1,0 +1,13 @@
+runtime/*
+!runtime/.gitkeep
+log/*
+!log/.gitkeep
+root-home/*
+!root-home/.gitkeep
+runtime-cli/*
+!runtime-cli/.gitkeep
+log-cli/*
+!log-cli/.gitkeep
+screenshots/
+vendor/*.deb
+vendor/*.part
