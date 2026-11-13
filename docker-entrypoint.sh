@@ -12,6 +12,10 @@ chmod 700 "$XDG_RUNTIME_DIR"
 
 log() { echo "[entrypoint] $*"; }
 
+if [ -f /opt/sslvpnclient/.client-version ]; then
+    log "客户端版本 $(cat /opt/sslvpnclient/.client-version)（$(uname -m)）"
+fi
+
 cleanup() {
     log "收到退出信号，清理子进程"
     jobs -p | xargs -r kill 2>/dev/null

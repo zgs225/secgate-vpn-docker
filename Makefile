@@ -3,12 +3,12 @@ IMAGE   := $(or $(SECGATE_IMAGE),ghcr.io/zgs225/secgate-vpn-docker:latest)
 GUI     := /opt/sslvpnclient/files/bin/sslvpn
 URL     := http://127.0.0.1:6080/vnc.html
 
-.PHONY: help build pull up down restart ps logs url shot verify shell window ruleset nas-deploy fetch rebuild clean
+.PHONY: help build pull up down restart ps logs url shot verify smoke shell window ruleset nas-deploy fetch fetch-all rebuild multiarch clean
 
 help: ## 显示所有可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-build: ## 本地构建图形端镜像（需要 vendor/ 里的官方海光麒麟 deb，打 ghcr 同名 tag）
+build: ## 本地构建镜像（按本机架构选 vendor/ 里的 deb，打 ghcr 同名 tag）
 	docker compose build
 
 pull: ## 拉取 GitHub Actions 发布到 GHCR 的镜像（不想本地构建时用它）
@@ -48,11 +48,21 @@ window: ## 列出 X 里的窗口（确认客户端窗口存在）
 verify: ## 自检：X / noVNC / SOCKS5 / 客户端进程 / 窗口 / 隧道
 	@./scripts/verify.sh
 
+smoke: ## 运行时冒烟：临时起容器确认 X/noVNC/SOCKS/GUI 都活着（不登录）
+	@./scripts/smoke-image.sh $(IMAGE)
+
 ruleset: ## 导出 tun0 路由为 clash ipcidr ruleset（需已登录）
 	@./scripts/export-clash-ruleset.sh
 
-fetch: ## 从官方下载站取图形端安装包到 vendor/（不入库）
+fetch: ## 取本机架构的厂商 deb 到 vendor/（不入库）
 	@./scripts/fetch-client-deb.sh
+
+fetch-all: ## 取 amd64 + arm64 两个 deb（多架构构建用）
+	@./scripts/fetch-client-deb.sh all
+
+multiarch: ## 本地构建 amd64+arm64 并推送（需先 docker login；平时交给 CI）
+	docker buildx build --platform linux/amd64,linux/arm64 -t $(IMAGE) \
+	  --build-arg IMAGE_VERSION=$$(git rev-parse --short HEAD) --push .
 
 nas-deploy: ## 部署/更新到 NAS（NAS_HOST=...，端口可用 SOCKS_PORT/VNC_PORT 覆盖）
 	@./scripts/deploy-nas.sh

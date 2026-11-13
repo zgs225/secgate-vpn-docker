@@ -34,14 +34,16 @@ log.txt: <info>  Connect server success
 |---|---|
 | 产品 | 奇安信 SecGate Access（SD-WAN / NGFW 的 SSL VPN · ZTNA 客户端） |
 | 下载站 | https://sdwanapp.qianxin.com/download.html?product-type=sdwan |
-| 本项目用的包 | `download/sdwan-v6.0/hygon_kylin/KYLIN-X86_SDWANClient_Setup.deb`（「海光麒麟」amd64 GUI） |
-| 版本 / 校验 | `sslvpnclient 1.1.3.1010701`，md5 `49e3472a779e62be596117e4cefaee4a` |
-| 包结构 | linuxdeployqt 打包：`files/bin/sslvpn`（19 MB）+ `libsslvpnsdk.so` + 自带 Qt5/字体，落盘 `/opt/sslvpnclient` |
+| 包（amd64） | `download/sdwan-v6.0/hygon_kylin/KYLIN-X86_SDWANClient_Setup.deb`（「海光麒麟」GUI） |
+| 包（arm64） | `download/sdwan-v6.0/kunpeng_kylin/KYLIN-ARM_SDWANClient_Setup.deb`（「鲲鹏麒麟」GUI；「飞腾麒麟」用同一个文件） |
+| 版本 / 校验 | amd64 `sslvpnclient 1.1.3.1010701` / md5 `49e3472a779e62be596117e4cefaee4a`<br>arm64 `sslvpnclient 1.1.5.1010901` / md5 `5d3ea8c60927bc902a166f14b6cbacd6` |
+| 包结构 | linuxdeployqt 打包：`files/bin/sslvpn` + `libsslvpnsdk.so` + 自带 Qt5/字体，落盘 `/opt/sslvpnclient`；两个架构都是**原生**二进制 |
 
 > 厂商的安装包**不入库**（本仓库不转发第三方二进制）。第一次构建前先取包：
 >
 > ```bash
-> make fetch        # → vendor/KYLIN-X86_SDWANClient_Setup.deb（带 md5 校验）
+> make fetch        # → vendor/ 里本机架构的包（带 md5 校验）
+> make fetch-all    # amd64 + arm64 都取（多架构构建/CI 用）
 > ```
 >
 > 详见 `vendor/README.md`。
@@ -61,10 +63,11 @@ Dockerfile            图形端镜像（ubuntu24.04 + 麒麟 GUI 包 + Xvfb/noVN
 docker-entrypoint.sh  起 Xvfb/openbox/x11vnc/websockify/microsocks，再拉起 GUI（崩溃自启）
 docker-compose.yml    secgate-gui
 Makefile               make help 看全部
-.github/workflows/docker.yml  main 分支构建镜像并发布到 ghcr.io
+.github/workflows/docker.yml  main 分支构建 amd64+arm64 镜像并发布到 ghcr.io
 scripts/verify.sh      只读自检（含自动截图）
+scripts/smoke-image.sh 运行时冒烟（临时起容器验证 X/noVNC/SOCKS/GUI）
 scripts/deploy-nas.sh  部署到 NAS（Synology）并（重）建容器
-scripts/fetch-client-deb.sh  从官方下载站取厂商 deb（带 md5 校验）
+scripts/fetch-client-deb.sh  从官方下载站取厂商 deb（amd64 / arm64，带 md5 校验）
 scripts/export-clash-ruleset.sh  tun0 路由 → clash/mihomo ipcidr ruleset
 LICENSE                MIT
 vendor/                安装包放这里（不入库，见 vendor/README.md）
@@ -83,18 +86,21 @@ docker pull ghcr.io/zgs225/secgate-vpn-docker:latest
 | tag | 说明 |
 |---|---|
 | `latest` | `main` 最新构建 |
-| `1.1.3.1010701` | 对应的厂商客户端版本（跟 Dockerfile 的 LABEL 走） |
 | `sha-xxxxxxx` | 每次提交一个，便于回滚/复现 |
 | `1.2.3` / `1.2` | 打 `v1.2.3` tag 时额外产生 |
 
-镜像只有 **linux/amd64**（厂商只发海光麒麟 amd64 包）。arm64 主机需要
-`platform: linux/amd64` + binfmt（走 qemu，很慢）。
+**多架构**：同一个 tag 下是 `linux/amd64` + `linux/arm64` 的 manifest list，`docker pull`
+按宿主架构自动选。两边都用厂商**原生**包（amd64 海光麒麟 / arm64 鲲鹏麒麟），不靠 qemu 计
+译。两个包的客户端小版本不同（厂商各自打包），所以 tag 里不带客户端版本号；实际版本看
+镜像里的 `/opt/sslvpnclient/.client-version`（启动日志会打一行）。
 
 CI 说明：
 
-- 厂商 deb **不入库**，workflow 里跑 `scripts/fetch-client-deb.sh` 从官方下载站取包并校验 md5，
-  命中 `actions/cache` 时跳过这 60 MB 下载
-- PR 只构建不推送，并在 runner 上跑冒烟检查（客户端二进制 / 字体 / noVNC 依赖）
+- 厂商 deb **不入库**，workflow 跑 `scripts/fetch-client-deb.sh all` 取两个包并校验 md5，
+  命中 `actions/cache` 时跳过这 100 MB 下载
+- arm64 的 RUN 步骤在 amd64 runner 上由 `docker/setup-qemu-action` 模拟
+- PR 不推送：amd64 载入后跑 `scripts/smoke-image.sh`；另有**原生 arm64 runner**
+  （`ubuntu-24.04-arm`）跑同一套冒烟（Xvfb/noVNC/SOCKS5/GUI 进程 + ELF 架构匹配）
 - 仓库是 public，包随仓库公开可匿名拉取（这一点已用空凭据 `docker pull` 验证过）；
   如果以后把仓库或包改成私有，其它机器上就要 `docker login ghcr.io`
   （PAT 至少带 `read:packages`）
@@ -112,12 +118,13 @@ make url        # http://127.0.0.1:6080/vnc.html
 从源码构建（等于把同一个 ghcr tag 打在本地）：
 
 ```bash
-make fetch      # 先从官方下载站取图形端安装包（vendor/*.deb 不入库）
+make fetch      # 先取本机架构的厂商包（vendor/*.deb 不入库，arm64 主机会取 ARM 包）
 make build      # 构建 ghcr.io/zgs225/secgate-vpn-docker:latest
 make up         # 启动
 make shot       # 截一张当前桌面到 screenshots/（不开浏览器也能看状态）
 make window     # 列 X 窗口，确认客户端窗口在
-make verify     # 全套自检
+make verify     # 全套自检（在已启动的容器上）
+make smoke      # 运行时冒烟（自己起临时容器，不碰现有容器）
 make logs       # 容器日志
 ```
 
@@ -149,6 +156,7 @@ NAS_HOST=nas FORCE_PUSH=1 make nas-deploy # 本地构建后强制 save/load 过�
 - 固定版本：`NAS_HOST=nas IMAGE=ghcr.io/zgs225/secgate-vpn-docker:sha-abc1234 make nas-deploy`
 
 - 宿主机只需 `docker`/Container Manager，且内核有 `tun`（`ls /dev/net/tun`）
+- 镜像是多架构的，NAS（amd64）上 `docker pull` 会自动挑 `linux/amd64` 那层
 - 默认发布 `127.0.0.1:1080 → 容器 1080`（SOCKS5）、`127.0.0.1:6080 → 容器 6080`（noVNC），
   用 `SOCKS_PORT` / `VNC_PORT` 覆盖；端口别和宿主上已有的 VPN 容器撞车
 - **两个端口都没有认证**：默认只绑 NAS 回环，本机访问走 SSH 隧道。
@@ -246,8 +254,9 @@ rules:
 - **noVNC / SOCKS 没有认证** — 默认只绑回环或仅在内网。要在别的机器用请走 SSH 隧道：
   `ssh -L 6080:127.0.0.1:6080 -L 1080:127.0.0.1:1080 <本机>`，不要直接暴露到公网。
 - **需要命令行版** — 不提供。CLI 端在开二次认证的网关上进不了隧道，镜像也就不保留。
-- **arm64 主机** — 官方 Linux 客户端只有 amd64 包。要么在 compose 里加 `platform: linux/amd64`
-  让 qemu 跑（慢，且需要 binfmt），要么想别的办法。
+- **arm64 主机** — 厂商有原生 arm64 包（鲲鹏/飞腾麒麟），`make fetch` 会按本机架构
+  自动取 ARM 包，`make build` 直接能出 arm64 镜像；预构建镜像也是双架构，`docker pull`
+  自动选。不需要 `platform: linux/amd64` + qemu 转译。
 
 ## 免责声明
 

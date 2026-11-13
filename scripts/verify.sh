@@ -4,8 +4,15 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
 SERVICE=secgate-gui
-DEB=vendor/KYLIN-X86_SDWANClient_Setup.deb
-OFFICIAL_MD5=49e3472a779e62be596117e4cefaee4a
+# 厂商按架构发包，两个都校验；只取了一个也没关系，缺的那个跳过
+DEB_AMD64=vendor/KYLIN-X86_SDWANClient_Setup.deb
+DEB_ARM64=vendor/KYLIN-ARM_SDWANClient_Setup.deb
+OFFICIAL_MD5_AMD64=49e3472a779e62be596117e4cefaee4a
+OFFICIAL_MD5_ARM64=5d3ea8c60927bc902a166f14b6cbacd6
+case "$(uname -m)" in
+    aarch64 | arm64) HOST_DEB=$DEB_ARM64 ;;
+    *) HOST_DEB=$DEB_AMD64 ;;
+esac
 
 # SOCKS5 探测目标：默认用 IP 字面量。宿主若跑 clash/mihomo 的 fake-ip DNS，
 # 容器会把域名解析成 198.18.x.x，这类地址只在拦截流量的代理里生效，
@@ -24,22 +31,25 @@ http_code() {
 }
 
 echo "== 1. vendor deb 校验（官方 CDN md5 / 本地 sha256）=="
-if [ -f "$DEB" ]; then
-  md5=$(md5sum "$DEB" | awk '{print $1}')
-  info "md5=$md5"
-  [ "$md5" = "$OFFICIAL_MD5" ] && ok "与官方 md5 一致" || bad "md5 与官方不一致（下载被截断？）"
-  if [ -f "$DEB.sha256" ]; then
-    if ( cd "$(dirname "$DEB")" && sha256sum -c "$(basename "$DEB").sha256" --status ); then
-      ok "sha256 与 $DEB.sha256 一致"
+check_deb() {
+  local deb=$1 official=$2 md5
+  [ -f "$deb" ] || return 0
+  md5=$(md5sum "$deb" | awk '{print $1}')
+  info "$(basename "$deb") md5=$md5"
+  [ "$md5" = "$official" ] && ok "与官方 md5 一致" || bad "md5 与官方不一致（下载被截断？）"
+  if [ -f "$deb.sha256" ]; then
+    if ( cd "$(dirname "$deb")" && sha256sum -c "$(basename "$deb").sha256" --status ); then
+      ok "sha256 与 $(basename "$deb").sha256 一致"
     else
       bad "sha256 不一致"
     fi
   else
-    info "无 $DEB.sha256（make fetch 会生成），跳过 sha256 校验"
+    info "无 $(basename "$deb").sha256（make fetch 会生成），跳过 sha256 校验"
   fi
-else
-  bad "缺少 $DEB"
-fi
+}
+check_deb "$DEB_AMD64" "$OFFICIAL_MD5_AMD64"
+check_deb "$DEB_ARM64" "$OFFICIAL_MD5_ARM64"
+[ -f "$HOST_DEB" ] || bad "缺少本机架构的 $(basename "$HOST_DEB")（先 make fetch）"
 
 echo "== 2. 容器状态 =="
 state=$(docker inspect -f '{{.State.Status}}' "$SERVICE" 2>/dev/null || echo missing)
